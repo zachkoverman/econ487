@@ -1,0 +1,464 @@
+---
+title: "Koverman PS 3"
+author: "Zach Koverman"
+date: "2023-10-16"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Setup
+
+```{r Setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(ggthemes)
+library(broom)
+library(dplyr)
+
+options(dplyr.summarise.inform = FALSE)
+
+set.seed(22)
+
+setwd(paste0("/Users/zachkoverman/Desktop/School/",
+      "Senior Year/ECON 487 - Data Science for Strategic Pricing/Homeworks"))
+oj <- read.csv("oj.csv")
+```
+
+# Question 1
+
+Let's focus on two variables HHLARGE ("fraction of households that are
+large") and EDUC ("fraction of shoppers with advanced education").
+
+## Part a.
+
+What are the means and percentiles of each of these variables? HINT:
+summary(oj\$EDUC)
+
+```{r 1.a}
+print("Summary Statistics of EDUC:")
+summary(oj$EDUC)
+
+print("Summary Statistics of HHLARGE:")
+summary(oj$HHLARGE)
+```
+
+The mean value for EDUC is about 22.52% of shoppers have an advanced
+education, with a 25th percentile of about 14.60% and a 75th percentile
+of 28.44%. The mean value for HHLAARGE is about 11.6% of shoppers live
+in large households, with a 25th percentile of about 9.79% and a 75th
+percentile of about 13.52%.
+
+## Part b.
+
+Using your coefficient estimates from the regression in Q9 of the
+previous problem set (if you did not include HHLARGE and EDUC, rerun the
+regression with them included):
+
+```{r 1.b}
+model1b <- lm(logmove ~ log(price)*feat*brand + AGE60 + EDUC + ETHNIC + INCOME +
+                HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + 
+                CPWVOL5, oj)
+summary(model1b)
+```
+
+### Part b.i.
+
+If we move from the median value of HHLARGE to the 75th percentile (3rd
+quartile), how much does log(quantity) change each week on average?
+Note: if we wanted to assess the changes in levels, you'd want to take
+the exponent of everything.
+
+```{r 1.b.i}
+coef_1b_hhlarge <- coef(model1b)["HHLARGE"]
+summ_hhlarge_3qu <- summary(oj$HHLARGE)[5]
+summ_hhlarge_med <- summary(oj$HHLARGE)[3]
+
+change_1b_hhlarge <- coef_1b_hhlarge*(summ_hhlarge_3qu - summ_hhlarge_med)
+change_1b_hhlarge
+```
+
+If we move from the median value of HHLARGE to the 75th percentile, then
+log(quantity) decreases by about 2.20% each week on average.
+
+### Part b.ii.
+
+If we move from the median value of EDUC to the 75th percentile (3rd
+quartile), how much does log(quantity) change each week on average?
+
+```{r 1.b.ii}
+coef_1b_educ <- coef(model1b)["EDUC"]
+summ_educ_3qu <- summary(oj$EDUC)[5]
+summ_educ_med <- summary(oj$EDUC)[3]
+
+change_1b_educ <- coef_1b_educ*(summ_educ_3qu - summ_educ_med)
+change_1b_educ
+```
+
+If we move from the median value of EDUC to the 75th percentile, then
+log(quantity) increases by about 5.26% each week on average.
+
+### Part b.iii.
+
+Based on this analysis, which is the more important predictor of demand?
+
+Based on this analysis, EDUC (fraction of shoppers with higher
+education) is a more important predictor of demand because a change in
+this variable has a larger effect on demand (log(quantity)) than a
+change in HHLARGE.
+
+## Part c.
+
+Now let's see if these variables impact price sensitivity. Add two
+interaction terms (with logprice) to the model to test this.
+
+```{r 1.c}
+model1c <- lm(logmove ~ log(price)*feat*brand + AGE60 + EDUC*log(price) + 
+                ETHNIC + INCOME + HHLARGE*log(price) + WORKWOM + HVAL150 + 
+                SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5, oj)
+summary(model1c)
+```
+
+### Part c.i
+
+What are the coefficients on the interaction terms?
+
+The coefficient on the interaction term for EDUC is significant at about
+3.52 and the coefficient on the interaction term for HHLARGE is
+significant at about -5.35.
+
+### Part c.ii
+
+Does the sign of your estimates make sense based on your intuition?
+
+Yes, the signs of these estimates make sense to me, since I would expect
+orange juice to be seen as a treat that families would buy if they have
+the extra money for it. Advanced education is tied to higher incomes, so
+it makes sense that its coefficient is positive. On the other side,
+larger families have to spend more to support more children, so I would
+expect them to be less likely to have the extra money for orange juice
+(which is supported by the negative sign of the coefficient).
+
+### Part c.iii
+
+What are the coefficient estimates on the variables EDUC and HHLARGE
+that aren't part of the interaction term? How do they compare to your
+regression from 1b?
+
+The coefficient estimate for the non-interaction term EDUC variable is
+now -1.90, which is decrease and change of signs from the coefficient of
+0.96 in the regression in 1b. The coefficient estimate for the
+non-interaction term HHLARGE variable is now 3.37, which is a large
+increase and change of signs from the coefficient of -0.92 in 1b.
+
+### Part c.iv
+
+Similar to 2b, if we move from the median value of each variable to the
+3rd quartile, how much does elasticity change? Based on this, which is
+more important to price sensitivity?
+
+```{r 1.c.iv}
+coef_1c_educ <- coef(model1c)["EDUC"]
+coef_1c_hhlarge <- coef(model1c)["HHLARGE"]
+coef_1c_educ_it <- coef(model1c)["log(price):EDUC"]
+coef_1c_hhlarge_it <- coef(model1c)["log(price):HHLARGE"]
+
+change_1c_educ_it <- (coef_1c_educ + coef_1c_educ_it) * 
+  (summ_educ_3qu - summ_educ_med)
+change_1c_educ_it
+
+change_1c_hhlarge_it <- (coef_1c_hhlarge + coef_1c_hhlarge_it) * 
+  (summ_hhlarge_3qu - summ_hhlarge_med)
+change_1c_hhlarge_it
+```
+
+If we move by from the median value of each variable to the 3rd quartile
+now taking interaction terms as part of the regression formula,
+elasticity of EDUC becomes about 0.089, while the elasticity of HHLARGE
+becomes about -.047. The fraction of households with large families is
+more important to price sensitivity because its elasticity is closer to
+0, making it more elastic and thus is a bigger factor in making quantity
+demanded sensitive to changes in price.
+
+## Part d.
+
+You should notice that the coefficients on EDUC and HHLARGE have flipped
+sign once we include interaction terms with price. HHLARGE now appears
+to be a positive demand shifter and increases price sensitivity. Explain
+in words or pictures what is going on.
+
+Now that we have an interaction term with HHLARGE tied to the
+log(price), we have gained a better understanding of how family size
+affects the demand for orange juice and fits into our model. Before, we
+could see that areas with higher proportions of large families had lower
+demand for orange juice. With the interaction term, we can see that more
+large families actually increase demand for orange juice as a base
+level, but these families are sensitive to changes in price and will
+decrease their demand as price increases.
+
+# Question 2
+
+Create make a new dataframe which takes the previous week's prices as a
+variable on the same line as the current week. This would enable you to
+see if there is intertemporal substitution.
+
+## Part a
+
+There are going to be a couple of steps.First is creating a new
+dataframe which is like the old one except that the week variable will
+change by a single week.
+
+### Part a.i-ii
+
+```{r 2.a.i-ii}
+oj_temp <- oj
+oj_temp$week <- oj_temp$week+1
+```
+
+### Part a.iii
+
+```{r 2.a.iii}
+oj_new <- merge(oj, oj_temp, by=c("brand", "store", "week"))
+
+# "_lag" indicates last week's value
+oj_new <- oj_new %>% 
+  rename("logmove_lag" = "logmove.y",
+         "feat_lag" = "feat.y",
+         "price_lag" = "price.y",
+         "AGE60_lag" = "AGE60.y",
+         "EDUC_lag" = "EDUC.y",
+         "ETHNIC_lag" = "ETHNIC.y",
+         "INCOME_lag" = "INCOME.y",
+         "HHLARGE_lag" = "HHLARGE.y",
+         "WORKWOM_lag" = "WORKWOM.y",
+         "HVAL150_lag" = "HVAL150.y",
+         "SSTRDIST_lag" = "SSTRDIST.y",
+         "SSTRVOL_lag" = "SSTRVOL.y",
+         "CPDIST5_lag" = "CPDIST5.y",
+         "CPWVOL5_lag" = "CPWVOL5.y")
+```
+
+## Part b
+
+Now run a regression with this week's log(quantity) on current and last
+week's price.
+
+```{r 2.b}
+model2b <- lm(logmove.x ~ log(price.x) + log(price_lag), oj_new)
+summary(model2b)
+```
+
+## Part c
+
+What do you notice about the previous week's elasticity? Does this make
+sales more or less attractive from a profit maximization perspective?
+Why?
+
+Last week's elasticity is inelastic, since the absolute value of the
+coefficient is greater than 1. This makes sales more attractive from a
+profit maximization perspective because it means that the previous
+week's price does not have a large effective on this week's quantity
+demanded, so stores should not worry about long-term effects of putting
+an item on sale at the present.
+
+# Question 3
+
+In the last assignment you calculated the MSE on a test set. Let's
+expand that code to include 5-fold cross validation.
+
+## Part a.
+
+Create 5 partitions of the data of equal size.
+
+```{r 3.a}
+num_rows_total <- nrow(oj_new)
+num_rows_partition <- num_rows_total / 5
+
+oj_sampled_indices <- sample(num_rows_total)
+oj_shuffled <- oj_new[oj_sampled_indices, ]
+
+labels <- rep(1:5, each = num_rows_partition, length.out = num_rows_total)
+oj_split <- split(oj_shuffled, labels)
+
+oj_split_1 <- as.data.frame(oj_split[1])
+oj_split_2 <- as.data.frame(oj_split[2])
+oj_split_3 <- as.data.frame(oj_split[3])
+oj_split_4 <- as.data.frame(oj_split[4])
+oj_split_5 <- as.data.frame(oj_split[5])
+
+sapply(lapply(oj_split_1, unique), length)
+sapply(lapply(oj_split_2, unique), length)
+sapply(lapply(oj_split_3, unique), length)
+sapply(lapply(oj_split_4, unique), length)
+sapply(lapply(oj_split_5, unique), length)
+```
+
+## Part b.
+
+Create 5 training datasets using 80% of the data for each one. This
+could be done by "appending" the data together using rbind or via
+sampling.
+
+```{r 3.b}
+oj_train_1 <- sample_frac(oj_split_1, size=.8)
+oj_test_1 <- anti_join(oj_split_1, oj_train_1)
+oj_train_2 <- sample_frac(oj_split_2, size=.8)
+oj_test_2 <- anti_join(oj_split_2, oj_train_2)
+oj_train_3 <- sample_frac(oj_split_3, size=.8)
+oj_test_3 <- anti_join(oj_split_3, oj_train_3)
+oj_train_4 <- sample_frac(oj_split_4, size=.8)
+oj_test_4 <- anti_join(oj_split_4, oj_train_4)
+oj_train_5 <- sample_frac(oj_split_5, size=.8)
+oj_test_5 <- anti_join(oj_split_5, oj_train_5)
+```
+
+## Part c.
+
+Estimate a complex model using OLS which includes price, featured,
+brand, brand\*price and lagged price, all the sociodemographic variables
+and interactions of EDUC and HHSIZE with price on each of the training
+sets then the MSE on the test sets using the predict command.
+
+```{r 3.c}
+model3c_1 <- lm(X1.logmove.x ~ X1.price.x + X1.feat.x + X1.brand + 
+                  X1.brand*X1.price.x + X1.price_lag + X1.AGE60.x + X1.EDUC.x + 
+                  X1.ETHNIC.x + X1.INCOME.x + X1.HHLARGE.x + X1.WORKWOM.x + 
+                  X1.HVAL150.x + X1.SSTRDIST.x + X1.SSTRVOL.x + X1.CPDIST5.x + 
+                  X1.CPWVOL5.x + X1.EDUC.x*X1.price.x + X1.HHLARGE.x*X1.price.x, 
+                oj_train_1)
+model3c_2 <- lm(X2.logmove.x ~ X2.price.x + X2.feat.x + X2.brand + 
+                  X2.brand*X2.price.x + X2.price_lag + X2.AGE60.x + X2.EDUC.x + 
+                  X2.ETHNIC.x + X2.INCOME.x + X2.HHLARGE.x + X2.WORKWOM.x + 
+                  X2.HVAL150.x + X2.SSTRDIST.x + X2.SSTRVOL.x + X2.CPDIST5.x + 
+                  X2.CPWVOL5.x + X2.EDUC.x*X2.price.x + X2.HHLARGE.x*X2.price.x, 
+                oj_train_2)
+model3c_3 <- lm(X3.logmove.x ~ X3.price.x + X3.feat.x + X3.brand + 
+                  X3.brand*X3.price.x + X3.price_lag + X3.AGE60.x + X3.EDUC.x + 
+                  X3.ETHNIC.x + X3.INCOME.x + X3.HHLARGE.x + X3.WORKWOM.x + 
+                  X3.HVAL150.x + X3.SSTRDIST.x + X3.SSTRVOL.x + X3.CPDIST5.x + 
+                  X3.CPWVOL5.x + X3.EDUC.x*X3.price.x + X3.HHLARGE.x*X3.price.x, 
+                oj_train_3)
+model3c_4 <- lm(X4.logmove.x ~ X4.price.x + X4.feat.x + X4.brand + 
+                  X4.brand*X4.price.x + X4.price_lag + X4.AGE60.x + X4.EDUC.x + 
+                  X4.ETHNIC.x + X4.INCOME.x + X4.HHLARGE.x + X4.WORKWOM.x + 
+                  X4.HVAL150.x + X4.SSTRDIST.x + X4.SSTRVOL.x + X4.CPDIST5.x + 
+                  X4.CPWVOL5.x + X4.EDUC.x*X4.price.x + X4.HHLARGE.x*X4.price.x, 
+                oj_train_4)
+model3c_5 <- lm(X5.logmove.x ~ X5.price.x + X5.feat.x + X5.brand + 
+                  X5.brand*X5.price.x + X5.price_lag + X5.AGE60.x + X5.EDUC.x + 
+                  X5.ETHNIC.x + X5.INCOME.x + X5.HHLARGE.x + X5.WORKWOM.x + 
+                  X5.HVAL150.x + X5.SSTRDIST.x + X5.SSTRVOL.x + X5.CPDIST5.x + 
+                  X5.CPWVOL5.x + X5.EDUC.x*X5.price.x + X5.HHLARGE.x*X5.price.x, 
+                oj_train_5)
+```
+
+### Part c.i
+
+Calculate the MSE for the model on the test set for each fold (e.g.,
+there will be five sets of model parameters and five test set MSEs with
+5-fold cross validation).
+
+```{r 3.c.i}
+model3c_1_hat <- predict(model3c_1, newdata=oj_test_1)
+model3c_2_hat <- predict(model3c_2, newdata=oj_test_2)
+model3c_3_hat <- predict(model3c_3, newdata=oj_test_3)
+model3c_4_hat <- predict(model3c_4, newdata=oj_test_4)
+model3c_5_hat <- predict(model3c_5, newdata=oj_test_5)
+
+oj_3c_1_test <- data.frame(pred = model3c_1_hat, 
+                           actual = oj_test_1$X1.logmove.x)
+oj_3c_2_test <- data.frame(pred = model3c_2_hat, 
+                           actual = oj_test_2$X2.logmove.x)
+oj_3c_3_test <- data.frame(pred = model3c_3_hat, 
+                           actual = oj_test_3$X3.logmove.x)
+oj_3c_4_test <- data.frame(pred = model3c_4_hat, 
+                           actual = oj_test_4$X4.logmove.x)
+oj_3c_5_test <- data.frame(pred = model3c_5_hat, 
+                           actual = oj_test_5$X5.logmove.x)
+
+mse_3c_1_test <- mean((oj_3c_1_test$actual - oj_3c_1_test$pred)^2)
+mse_3c_2_test <- mean((oj_3c_2_test$actual - oj_3c_2_test$pred)^2)
+mse_3c_3_test <- mean((oj_3c_3_test$actual - oj_3c_3_test$pred)^2)
+mse_3c_4_test <- mean((oj_3c_4_test$actual - oj_3c_4_test$pred)^2)
+mse_3c_5_test <- mean((oj_3c_5_test$actual - oj_3c_5_test$pred)^2)
+```
+
+### Part c.ii
+
+Average across the MSEs to get the cross validated MSE for an OLS model
+run on that particular set of features.
+
+```{r 3.c.ii}
+avg_mse_cv <- (mse_3c_1_test + mse_3c_2_test + mse_3c_3_test + mse_3c_4_test + 
+                 mse_3c_5_test) / 5
+print("Average test MSE across 5-fold cross validation: ")
+avg_mse_cv
+```
+
+# Theoretical Questions
+
+Assume that in addition to orange juice, you also observe demand for
+bananas.
+
+## Part a.
+
+What regression would you run to determine if bananas and orange juice
+are complements or substitutes? What is the coefficient of interest
+(i.e. on what variable) that would inform you?
+
+I would run a regression that regresses quantity of bananas purchased on
+quantity of orange juice bought. If the coefficient on orange juice is
+positive, that would tell me that they are complements because quantity
+of bananas purchased increases as quantity of orange juice purchased
+increases. If the coefficient on orange juice is negative, that would
+tell me they are substitutes because the quantity of bananas purchased
+decreases as the quantity of orange juice purchased increases.
+
+## Part b.
+
+Assume you find they are substitutes. What would the sign of the
+coefficient be? Would you be more or less likely to bundle these
+products if they are substitutes?
+
+The sign of the coefficient would be negative if they were substitutes,
+since that would reflect an increase in the quantity demanded of one
+good corresponds to a decrease in the quantity demanded of the other.
+You would be more likely to bundle these products if they are
+substitutes.
+
+### Part b.i
+
+Explain why with an equation, figure or a sentence or two.
+
+You would be more likely to bundle these products if they are
+substitutes because that would help reduce the adverse affect on demand
+that one good has on the other. The better deal would help capture sales
+of the other good along with the one that the consumer is primarily
+interested in.
+
+### Part b.ii
+
+Would the price of the bundle be less than or more than the sum of the
+two independent prices? (Not a trick question; verifying you understand
+bundles.)
+
+The price of the bundle would be less than the sum of the two
+independent prices, because this would convince people to buy both goods
+(since it would present a better deal for the main good they want)
+instead of just buying one.
+
+## Part c.
+
+During a sale for orange juice, should you continue to offer the bundle?
+Why or why not? HINT: who is price sensitive for orange juice? Who comes
+into market? Would you want to offer the bundle at a lower price than
+before?
+
+During a sale for orange juice, you should continue to offer the bundle
+because the sale will hurt the demand for bananas even more, so the
+bundle will be important in getting people to still buy bananas. You
+would want to drp the price of the bundle as well, since otherwise
+people may now find the bundle too expensive and choose to just buy
+orange juice.

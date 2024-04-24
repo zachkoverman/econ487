@@ -1,0 +1,219 @@
+---
+title: "Koverman PS 7"
+author: "Zach Koverman"
+date: "2023-11-13"
+output: html_document
+---
+
+# Problem Set 7
+
+## Setup
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(randomForest)
+library(glmnet)
+library(xgboost)
+library(ggplot2)
+library(ggthemes)
+library(broom)
+library(tidyr)
+library(plyr)
+library(dplyr)
+
+options(dplyr.summarise.inform = FALSE)
+
+set.seed(22)
+
+setwd(paste0("/Users/zachkoverman/Desktop/School/",
+      "Senior Year/ECON 487 - Data Science for Strategic Pricing/Homeworks"))
+oj <- read.csv("oj.csv")
+oj$logprice <- log(oj$price)
+```
+
+## Question 1
+
+**Consider a market in which the seller of a product knows there are two types of consumers, a high\
+and a low preference type, which are indistinguishable from one another. The firm can produce\
+along a product quality spectrum, such as with cars.**
+
+### Part a.)
+
+**If the firm decides to offer a low quality good, what risk do they run?**
+
+If the firm offers a low quality good, they run the risk of losing the business and sales of higher preference customers, who the firm may have been able to charge a higher markup.
+
+### Part b.)
+
+**What two options do they have to mitigate this risk?**
+
+One option the firm has to mitigate this risk is to really target their good, pricing, and advertising towards low preference consumers so as to try and maximize the number of these sales they make. Another option the firm has to mitigate this risk is to do everything it can to convince high preference consumers that this good is just as good as high-quality products, by targeting pricing and advertising to them, to try to capture sales from as many high preference consumers as possible.
+
+### Part c.)
+
+**How much would the firm be willing to pay to identify each type of consumer and price discriminate accordingly?**
+
+The amount that the firm would be willing to pay to identify each type of consumer and price discriminate accordingly is where the marginal cost of identifying the type of consumer is equal to the marginal gains from price discriminating.
+
+## Question 2
+
+**Coding up Double ML.**
+
+### Part a.)
+
+**Use the Double ML algorithm to estimate the own price elasticity for Tropicana, Minute Maid and Dominick's using all available lagged features in the ML models including feat as a predictor. You'll estimate three separate regressions one for each brand for the final stage OLS residuals regression.** 
+
+**i. I suggest using a random forest or XGBoost for P and Q.**
+
+**ii. I also suggest using store and week fixed effects in your model.**
+
+**iii. I also suggest using the interaction of important lagged price and quantity variables interacted with sociodemographic characteristics.**
+
+```{r 2.a Chunk 1}
+# Creating lagged variables
+oj_lagged <- oj %>% 
+  arrange(week) %>% # sorting by week
+  group_by(store, brand) %>% # need groupby to only lag within each store & brand combo
+  mutate(lag_price = ifelse(lag(week) + 1 == week, lag(logprice), NA)) %>% # check for min before lag
+  mutate(lag_feat = ifelse(lag(week) + 1 == week, lag(feat), NA)) %>%
+  mutate(lag_move = ifelse(lag(week) + 1 == week, lag(logmove), NA)) %>%
+  ungroup() %>% # undoes groupby
+  mutate(store = factor(store)) %>%
+  mutate(week = factor(week)) %>%
+  mutate(id = row_number()) %>%
+  drop_na()
+
+# Splitting into two folds, each consisting of 50% of the data
+oj_fold1 <- sample_frac(oj_lagged, size=.5)
+oj_fold2 <- anti_join(oj_lagged, oj_fold1)
+```
+
+```{r 2.a Chunk 2}
+# Estimating Q (logmove) with XGBoost
+formula_q2a <- formula("logmove ~ brand + feat + AGE60 + HHLARGE + EDUC + WORKWOM +
+                       HVAL150 + SSTRDIST + SSTRVOL + store + week + lag_move + lag_price + 
+                       lag_feat + lag_price*lag_feat*lag_move*brand") # no current price for double ML
+
+## Building XGBoost model for fold 1
+lm_q2a_fold1 <- lm(formula_q2a, data=oj_fold1)
+X_q2a_fold1 <- model.matrix(lm_q2a_fold1)
+xgb_matrix_q2a_fold1 <- xgb.DMatrix(data=X_q2a_fold1, label=oj_fold1$logmove)
+cv_q2a_fold1 <- xgb.cv(data = xgb_matrix_q2a_fold1,
+                   nfold = 5,
+                   nrounds = 12000,
+                   early_stopping_rounds = 12,
+                   print_every_n = 100)
+xgb_q2a_model_fold1 <- xgboost(data=xgb_matrix_q2a_fold1, 
+                     nrounds=cv_q2a_fold1$best_iteration,
+                     print_every_n = 20)
+
+## Doing XGBoost model for fold 2
+lm_q2a_fold2 <- lm(formula_q2a, data=oj_fold2)
+X_q2a_fold2 <- model.matrix(lm_q2a_fold2)
+xgb_matrix_q2a_fold2 <- xgb.DMatrix(data=X_q2a_fold2, label=oj_fold2$logmove)
+cv_q2a_fold2 <- xgb.cv(data = xgb_matrix_q2a_fold2,
+                   nfold = 5,
+                   nrounds = 12000,
+                   early_stopping_rounds = 12,
+                   print_every_n = 100)
+xgb_q2a_model_fold2 <- xgboost(data=xgb_matrix_q2a_fold2, 
+                     nrounds=cv_q2a_fold2$best_iteration,
+                     print_every_n = 20)
+
+## Predictions for each fold on the other fold
+oj_fold2$xgb_pred_q2a_fold2 <- predict(xgb_q2a_model_fold1, newdata=xgb_matrix_q2a_fold2)
+oj_fold1$xgb_pred_q2a_fold1 <- predict(xgb_q2a_model_fold2, newdata=xgb_matrix_q2a_fold1)
+
+## Calculating residuals
+oj_fold1$resid_q <- oj_fold1$logmove - oj_fold1$xgb_pred_q2a_fold1
+oj_fold2$resid_q <- oj_fold2$logmove - oj_fold2$xgb_pred_q2a_fold2
+```
+
+```{r 2.a Chunk 3}
+# Estimating P (logprice) with XGBoost
+formula_p2a <- formula("logprice ~ brand + feat + AGE60 + HHLARGE + EDUC + WORKWOM +
+                       HVAL150 + SSTRDIST + SSTRVOL + store + week + lag_move + lag_price + 
+                       lag_feat + lag_price*lag_feat*lag_move*brand") # no current price for double ML
+
+## Building XGBoost model for fold 1
+lm_p2a_fold1 <- lm(formula_p2a, data=oj_fold1)
+X_p2a_fold1 <- model.matrix(lm_p2a_fold1)
+xgb_matrix_p2a_fold1 <- xgb.DMatrix(data=X_p2a_fold1, label=oj_fold1$logprice)
+cv_p2a_fold1 <- xgb.cv(data = xgb_matrix_p2a_fold1,
+                   nfold = 5,
+                   nrounds = 12000,
+                   early_stopping_rounds = 12,
+                   print_every_n = 100)
+xgb_p2a_model_fold1 <- xgboost(data=xgb_matrix_p2a_fold1, 
+                     nrounds=cv_p2a_fold1$best_iteration,
+                     print_every_n = 20)
+
+## Doing XGBoost model for fold 2
+lm_p2a_fold2 <- lm(formula_p2a, data=oj_fold2)
+X_p2a_fold2 <- model.matrix(lm_p2a_fold2)
+xgb_matrix_p2a_fold2 <- xgb.DMatrix(data=X_p2a_fold2, label=oj_fold2$logprice)
+cv_p2a_fold2 <- xgb.cv(data = xgb_matrix_p2a_fold2,
+                   nfold = 5,
+                   nrounds = 12000,
+                   early_stopping_rounds = 12,
+                   print_every_n = 100)
+xgb_p2a_model_fold2 <- xgboost(data=xgb_matrix_p2a_fold2, 
+                     nrounds=cv_p2a_fold2$best_iteration,
+                     print_every_n = 20)
+
+## Predictions for each fold on the other fold
+oj_fold2$xgb_pred_p2a_fold2 <- predict(xgb_p2a_model_fold1, newdata=xgb_matrix_p2a_fold2)
+oj_fold1$xgb_pred_p2a_fold1 <- predict(xgb_p2a_model_fold2, newdata=xgb_matrix_p2a_fold1)
+
+## Calculating residuals
+oj_fold1$resid_p <- oj_fold1$logprice - oj_fold1$xgb_pred_p2a_fold1
+oj_fold2$resid_p <- oj_fold2$logprice - oj_fold2$xgb_pred_p2a_fold2
+```
+
+```{r 2.a Chunk 4}
+# Binding folds back together and doing the final regression
+oj_lagged_resid <- bind_rows(list(oj_fold1, oj_fold2))
+
+reg_q2a <- lm(resid_q ~ resid_p*brand, oj_lagged_resid)
+
+summary(reg_q2a)
+```
+
+### Part b.)
+
+**Now do the same thing but estimate the full 3x3 elasticity matrix. Remember that for the OLS regression you'll have residual log sales on the left and residual log price dom, residual log price MM and residual log price trop on the RHS and you'll estimate three separate regressions one for each brand.** 
+
+```{r 2.b}
+# Pivot data wide to get columns with residual price by brand
+
+pivoted <- oj_lagged_resid %>%
+  select(store, week, brand, resid_q, resid_p) %>%
+  pivot_wider(
+    id_cols = c(store, week),
+    names_from = brand,
+    values_from = resid_p
+  )
+
+wide_oj <- merge(oj_lagged_resid, pivoted, by = c("store", "week"))
+
+# Filtering data to each brand
+oj_dom <- filter(wide_oj, brand == 'dominicks')
+oj_mm <- filter(wide_oj, brand == 'minute.maid')
+oj_trop <- filter(wide_oj, brand == 'tropicana')
+
+# Regressions for cross-price elasticities
+reg_dom <- lm(resid_q ~ dominicks + minute.maid + tropicana, oj_dom)
+reg_mm <- lm(resid_q ~ dominicks + minute.maid + tropicana, oj_mm)
+reg_trop <- lm(resid_q ~ dominicks + minute.maid + tropicana, oj_trop)
+
+# Setting up a crude cross-price elasticity matrix
+cpe_matrix <- reg_dom$coefficients[2:4]
+cpe_matrix <- bind_rows(cpe_matrix, reg_mm$coefficients[2:4])
+cpe_matrix <- bind_rows(cpe_matrix, reg_trop$coefficients[2:4])
+cpe_matrix$brand <- c("dominicks", "minute maid", "tropicana")
+cpe_matrix <- cpe_matrix[, c("brand", "dominicks", "minute.maid", "tropicana")]
+cpe_matrix
+
+# Columns are change in price of brand, rows are change in quantity of brand
+```

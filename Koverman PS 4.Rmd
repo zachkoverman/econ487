@@ -1,0 +1,554 @@
+---
+title: "Koverman PS 4"
+author: "Zach Koverman"
+date: "2023-10-24"
+output: html_document
+---
+
+# Problem Set 4
+
+## Setup
+
+```{r Setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(ggthemes)
+library(broom)
+library(tidyr)
+library(plyr)
+library(dplyr)
+
+options(dplyr.summarise.inform = FALSE)
+
+set.seed(22)
+
+setwd(paste0("/Users/zachkoverman/Desktop/School/",
+      "Senior Year/ECON 487 - Data Science for Strategic Pricing/Homeworks"))
+oj <- read.csv("oj.csv")
+```
+
+## Question 1
+
+Take a model that includes brand, feat, log(price), their interactions, lagged price, and\
+demographics, and fit a LASSO using glmnet which is a workhorse R package for LASSO, Ridge\
+and Elastic Nets.
+
+### Part a.)
+
+**First remember to install the glmnet package and library to your R session.**
+
+```{r 1.a}
+library(glmnet)
+```
+
+### Part b.)
+
+**Remember to estimate a LASSO you must pass glmnet a matrix of data for candidate\
+features and a vector as candidate outcomes:**
+
+**In addition to the variables in the original dataframe, try to create tons of new features that you think could plausibly be predictive of quantity sold. This could include lagged prices, interactions of several features, etc.**
+
+```{r 1.b}
+oj_temp <- oj
+oj_temp$week <- oj_temp$week + 1
+oj_new <- merge(oj, oj_temp, by=c("brand", "store", "week"))
+oj_new <- oj_new %>% 
+  rename("logmove_lag" = "logmove.y",
+         "feat_lag" = "feat.y",
+         "price_lag" = "price.y",
+         "AGE60_lag" = "AGE60.y",
+         "EDUC_lag" = "EDUC.y",
+         "ETHNIC_lag" = "ETHNIC.y",
+         "INCOME_lag" = "INCOME.y",
+         "HHLARGE_lag" = "HHLARGE.y",
+         "WORKWOM_lag" = "WORKWOM.y",
+         "HVAL150_lag" = "HVAL150.y",
+         "SSTRDIST_lag" = "SSTRDIST.y",
+         "SSTRVOL_lag" = "SSTRVOL.y",
+         "CPDIST5_lag" = "CPDIST5.y",
+         "CPWVOL5_lag" = "CPWVOL5.y",
+         "logmove" = "logmove.x",
+         "feat" = "feat.x",
+         "price" = "price.x",
+         "AGE60" = "AGE60.x",
+         "EDUC" = "EDUC.x",
+         "ETHNIC" = "ETHNIC.x",
+         "INCOME" = "INCOME.x",
+         "HHLARGE" = "HHLARGE.x",
+         "WORKWOM" = "WORKWOM.x",
+         "HVAL150" = "HVAL150.x",
+         "SSTRDIST" = "SSTRDIST.x",
+         "SSTRVOL" = "SSTRVOL.x",
+         "CPDIST5" = "CPDIST5.x",
+         "CPWVOL5" = "CPWVOL5.x")
+
+# oj_new_feat <- subset(oj_new, select=-c(logmove, logmove_lag))
+# oj_new %>%
+ # mutate(log_price = log(price),
+  #       log_price_lag = log(price_lag),
+   #      AGE60.INCOME = AGE60*INCOME,
+    #     AGE60.log_price = AGE60*log_price,
+     #    EDUC.log_price = EDUC*log_price,
+      #   HHLARGE.log_price = HHLARGE*log_price,
+       #  WORKWOM.log_price = WORKWOM*log_price,
+        # HHLARGE.WORKWOM = HHLARGE*WORKWOM,
+         #EDUC.WORKWOM = EDUC*WORKWOM,
+         #INCOME.WORKWOM = INCOME*WORKWOM,
+         #INCOME.HHLARGE = INCOME*HHLARGE)
+
+formula <- formula('logmove ~ log(price) + log(price_lag) + log(price)*log(price_lag) + brand + brand*log(price) + brand*feat + brand*feat*log(price)+ INCOME + EDUC + HHLARGE + WORKWOM + AGE60 + feat + AGE60*INCOME + AGE60*log(price) + EDUC*log(price) + HHLARGE*log(price) + WORKWOM*log(price) + HHLARGE*WORKWOM + EDUC*WORKWOM + INCOME*WORKWOM + INCOME*HHLARGE +  HVAL150^2')
+
+model <- lm(formula, data=oj_new)
+X <- model.matrix(model)
+```
+
+### Part c.)
+
+**Investigate the coefficients of the cross validated LASSO model.**
+
+```{r 1.c}
+lasso_v1 <- glmnet(x=X, y=oj_new$logmove, alpha=1)
+
+#Results
+plot(lasso_v1)
+coef(lasso_v1, s=lasso_v1$lambda.min)
+
+# Now ready for cross validation version of the object
+cvfit <- cv.glmnet(x=X, y=oj_new$logmove, alpha=1)
+#Results
+plot(cvfit)
+cvfit$lambda.min
+log(cvfit$lambda.min)
+coef(cvfit, s = "lambda.min")
+
+```
+
+**Which are the parameters the cross validated LASSO model kicks out of the model? What is the ratio of number of features to number of observations? How might that relate to overfitting from "sampling error"?**
+
+My cross-validated LASSO model kicked out HVAL150\^2, Income:Age60, Income:workwom, and Income:HHLarge. The ratio of number of features to the number of observations is 20:28008. This relates to overfitting because the smaller this ratio is, the closer the sample gets to a true representation of the population.
+
+### Part d.)
+
+**Can you look that the glmnet objects and figure out what the out of sample (e.g., test set) average MSE was with the cross validated LASSO model relative to the model in 1.c?**
+
+```{r 1.d}
+cvfit$lambda.min
+```
+
+The average test MSE was about 0.000427 for the cross-validated LASSO model, while the average test MSE from Problem Set 3 was 0.424093. This is a massive difference, and means the LASSO model does a much better job of predicting logmove.
+
+### Part e.)
+
+**What is the advantage of using LASSO for choosing model complexity as opposed to using your intuition as an economist?** 
+
+The advantage of using LASSO for choosing model complexity as opposed to intuition for economists that LASSO helps you narrow down the regression to the features that are actually relevant. You can take this result and investigate the causal relationships of these features to the regressand.
+
+**i.) In what part of this process did you use your intuition as an economist? (*HINT: what's in the X matrix?)***
+
+I used my economics intuition in selecting which features to include and how to interact them in my model. For example, I included an interaction term between HHLARGE and WORKWOM because I know that there is likely a relationship where household size and working women can have an effect on quantity demanded when considered together.
+
+## Question 2
+
+**Now estimate the model with only the variable selected with the LASSO procedure but with OLS to avoid attenuation bias in the coefficients.**
+
+```{r 2}
+formula2 <- formula('logmove ~ log(price) + log(price_lag) + log(price)*log(price_lag) + brand + brand*log(price) + brand*feat + brand*feat*log(price) + INCOME + EDUC + HHLARGE + WORKWOM + AGE60 + feat + AGE60*INCOME + AGE60*log(price) + EDUC*log(price) + HHLARGE*log(price) + WORKWOM*log(price) + HHLARGE*WORKWOM + EDUC*WORKWOM + INCOME*WORKWOM + INCOME*HHLARGE')
+
+model2 <- lm(formula2, data=oj_new)
+X2 <- model.matrix(model2)
+
+lasso_v2 <- glmnet(x=X2, y=oj_new$logmove, alpha=1)
+
+#Results
+plot(lasso_v2)
+#coef(lasso_v2, s=lasso_v2$lambda.min)
+
+# Now ready for cross validation version of the object
+cvfit2 <- cv.glmnet(x=X2, y=oj_new$logmove, alpha=1)
+#Results
+plot(cvfit2)
+cvfit2$lambda.min
+log(cvfit2$lambda.min)
+coef(cvfit2, s = "lambda.min")
+```
+
+### Part a.)
+
+**Let's return to the orange juice assignment and get very precise about how to interpret coefficients. What is the predicted elasticity in the following cases?**
+
+**i.)** **For Dominicks when the lagged price is \$1 (NOTE: did you interact lagged price with current period price?) If not, does lagged price impact the *elasticity* this period or *log move* this period.**
+
+The predicted elasticity for Dominicks when lagged price is \$1 is -3.860. If I had not interacted lagged price with period price, then lagged price would impact log move this period and not elasticity.
+
+**ii.) For Tropicana**
+
+The predicted elasticity for Tropicana is -2.947.
+
+**iii.) For Tropicana when its featured**
+
+The predicted elasticity for Tropicana when it is featured is -3.842.
+
+**iv.) What is the 95% confidence interval for Tropicana?**
+
+```{r 2.a.iv}
+ci_trop <- confint(model2, "brandtropicana", level=0.95)
+ci_trop
+```
+
+The 95% confidence interval for Tropicana is [0.3094, 0.5455].
+
+#### 
+
+### Part b.)
+
+**Which product has the most elastic demand?**
+
+The product with the most elastic demand is Dominicks
+
+**i.) Should that product have the highest markup over costs or lowest markup over costs? Why?**
+
+Dominicks should have the lowest markup over costs because consumers are most price sensitive to it, so firms should be careful about marking up the price because Dominicks orange juice stands to lose the most sales due to an increase in price.
+
+## Question 3
+
+**Go back to using logmove and log(price)**
+
+### Part a.)
+
+**Estimate a 3x3 matrix own price and cross price elasticities for Dominicks, Minute Maid, and Tropicana using only the current week's prices. Be sure to estimate separate models for sales of Dominicks, MM and Tropicana (e.g., you'll run three separate regressions with the same RHS variables but different LHS variables). It doesn't need to be overly complicated, but make sure there is an interpretable elasticity estimate. NOTE: This will require three different regressions & add in sociodemographic controls for each store.**
+
+```{r 3.a}
+oj_new$logprice <- log(oj_new$price) # Should've done this earlier, but need it now
+
+# Setting up data for use in regressions
+oj_dom <- filter(oj_new, oj_new$brand == "dominicks")
+oj_mm <- filter(oj_new, oj_new$brand == "minute.maid")
+oj_trop <- filter(oj_new, oj_new$brand == "tropicana")
+
+oj_all <- oj_dom %>% 
+  rename("logprice_dom" = "logprice",
+         "logmove_dom" = "logmove")
+oj_all$logprice_mm <- oj_mm$logprice
+oj_all$logmove_mm <- oj_mm$logmove
+oj_all$logprice_trop <- oj_trop$logprice
+oj_all$logmove_trop <- oj_trop$logmove
+
+# Regressions
+model3a_dom <- lm(logmove_dom ~ logprice_dom + logprice_mm + logprice_trop + feat + INCOME +
+                EDUC + HHLARGE + INCOME + AGE60 + WORKWOM, oj_all)
+model3a_mm <- lm(logmove_mm ~ logprice_dom + logprice_mm + logprice_trop + feat + INCOME +
+                EDUC + HHLARGE + INCOME + AGE60 + WORKWOM, oj_all)
+model3a_trop <- lm(logmove_trop ~ logprice_dom + logprice_mm + logprice_trop + feat + INCOME +
+                EDUC + HHLARGE + INCOME + AGE60 + WORKWOM, oj_all)
+
+# Constructing matrix
+mat3a_r1 <- c("", "Dominicks", "Minute Maid", "Tropicana")
+mat3a_r2 <- c("Dominicks",
+            tidy(model3a_dom)[2, "estimate"], 
+            tidy(model3a_dom)[3, "estimate"], 
+            tidy(model3a_dom)[4, "estimate"])
+mat3a_r3 <- c("Minute Maid",
+            tidy(model3a_mm)[2, "estimate"], 
+            tidy(model3a_mm)[3, "estimate"], 
+            tidy(model3a_mm)[4, "estimate"])
+mat3a_r4 <- c("Tropicana",
+            tidy(model3a_trop)[2, "estimate"], 
+            tidy(model3a_trop)[3, "estimate"], 
+            tidy(model3a_trop)[4, "estimate"])
+
+matrix_3a <- rbind(mat3a_r1, mat3a_r2, mat3a_r3, mat3a_r4)
+matrix_3a
+```
+
+### Part b.)
+
+**Do the same but add in interactions for whether or not each brand is featured.**
+
+```{r 3.b}
+# Regressions
+model3b_dom <- lm(logmove_dom ~ logprice_dom + logprice_mm + logprice_trop + feat + INCOME +
+                  EDUC + HHLARGE + INCOME + AGE60 + WORKWOM + logprice_dom*feat + 
+                  logprice_mm*feat + logprice_trop*feat, oj_all)
+model3b_mm <- lm(logmove_mm ~ logprice_dom + logprice_mm + logprice_trop + feat + INCOME +
+                  EDUC + HHLARGE + INCOME + AGE60 + WORKWOM + logprice_dom*feat + 
+                  logprice_mm*feat + logprice_trop*feat, oj_all)
+model3b_trop <- lm(logmove_trop ~ logprice_dom + logprice_mm + logprice_trop + feat + INCOME +
+                  EDUC + HHLARGE + INCOME + AGE60 + WORKWOM + logprice_dom*feat + 
+                  logprice_mm*feat + logprice_trop*feat, oj_all)
+
+# Constructing matrix
+mat3b_r1 <- c("", "Dominicks", "Minute Maid", "Tropicana")
+mat3b_r2 <- c("Dominicks",
+            tidy(model3b_dom)[2, "estimate"], 
+            tidy(model3b_dom)[3, "estimate"], 
+            tidy(model3b_dom)[4, "estimate"])
+mat3b_r3 <- c("Minute Maid",
+            tidy(model3b_mm)[2, "estimate"], 
+            tidy(model3b_mm)[3, "estimate"], 
+            tidy(model3b_mm)[4, "estimate"])
+mat3b_r4 <- c("Tropicana",
+            tidy(model3b_trop)[2, "estimate"], 
+            tidy(model3b_trop)[3, "estimate"], 
+            tidy(model3b_trop)[4, "estimate"])
+
+matrix_3b <- rbind(mat3b_r1, mat3b_r2, mat3b_r3, mat3b_r4)
+matrix_3b
+```
+
+**i.) How do the estimates change?**
+
+When including an interaction term between logprice of each brand and feat, Minute Maid and Tropicana's own-price elasticities become more elastic, while Dominicks' own-price elasticity becomes more inelastic.
+
+**ii.) What product's sales suffer the most when Minute Maid is both featured and lowers its price?**
+
+Dominicks' sales suffers the most when Minute Maid is featured and lowers its price, as its cross-price elasticities with Minute Maid change more than Tropicana's.
+
+### Part c.)
+
+**Which two products are the most competitive with each other?** 
+
+Minute Maid and Dominicks are the most competitive with each other.
+
+**i.) How did you infer that looking at the cross price elasticity?**
+
+You can tell that Minute Maid and Dominicks are most competitive with each other because their cross-price elasticities with respect to each other are similar. When you look at each of these brands' cross-price elasticities with respect to Tropicana and vice versa, there are large differences.
+
+**ii.) What do you expect that to mean about the correlation of the prices of those two products?  Would they be more correlated or less correlated than the price of other pairs of products?**
+
+I think this would mean the prices of these two products will be more correlated, since they will need to follow each others' price changes to stay competitive.
+
+## Question 4
+
+**Create a sales weighted price for orange juice by store.** 
+
+### Part a.)
+
+**You'll first need to create actual sales (call it "Q") instead of log sales for the weighting and put it into your dataframe.** 
+
+```{r 4.a}
+oj_new$Q <- exp(oj_new$logmove)
+```
+
+### Part b.)
+
+**You can use the weighted.mean() function for each store-week combination in the dplyr library.**
+
+```{r 4.b}
+weighted_means_temp <- ddply(oj_new, c('store', 'week'),function(x) c(weighted_mean = weighted.mean(x$price, x$Q)))
+
+oj_weighted_means <- merge(oj_new, weighted_means_temp, by=c('store', 'week'))
+
+```
+
+## Question 5
+
+**Now use oj\$weighted_price as the LHS variable in a regression tree to predict differences in sales weight prices with store demographics as RHS variables. Note that you'll only need to do for a single brand since weighted price and sociodemographic variables are identical across brands within a store.**
+
+### Part a.)
+
+**There are a couple libraries you'll need which you'll see in the lecture notes (rpart, maptree, etc.)**
+
+```{r 5.a}
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(permute)
+library(maptree)
+```
+
+### Part b.)
+
+**There are two main pieces of code:**
+
+```{r 5.b}
+oj_ids <- oj_weighted_means[, c("store", "week", "brand", "feat", "logmove", "logprice","weighted_mean","AGE60","EDUC","ETHNIC","INCOME","HHLARGE","WORKWOM","HVAL150","SSTRDIST","SSTRVOL","CPDIST5","CPWVOL5")]
+
+dataToPass <- oj_ids[, c("weighted_mean","AGE60","EDUC","ETHNIC","INCOME","HHLARGE","WORKWOM","HVAL150","SSTRDIST","SSTRVOL","CPDIST5","CPWVOL5")]
+#The above creates a dataframe from the existing one (with weighted mean merged back in) which will then be passed into rpart (tree partitioning algorithm).  
+
+fit5b_1 <- rpart(as.formula(weighted_mean ~ .),data=dataToPass,method="anova",cp=0.007)
+#This is the code which will fit the tree.
+```
+
+### Part c.)
+
+**Play around with a couple different complexity parameters to get a feel for the data**
+
+```{r 5.c}
+fit5b_2 <- rpart(as.formula(weighted_mean ~ .),data=dataToPass,method="anova",cp=0.005)
+fit5b_3 <- rpart(as.formula(weighted_mean ~ .),data=dataToPass,method="anova",cp=0.002)
+
+draw.tree(fit5b_2)
+draw.tree(fit5b_3)
+draw.tree(fit5b_1)
+```
+
+### Part d.)
+
+**Choose three different leaves to group stores into based upon what explains sales weighted price.** 
+
+```{r 5.d}
+summary(fit5b_1$where) # I checked, fit5b_1$where only has 3 leaves with IDs (2, 4, 5)
+```
+
+**i.) Assign each store to one of these leaves (we used this code previously).**
+
+```{r 5.d.i}
+oj_ids$leaf = fit5b_1$where #This assigns leaves to observations.
+```
+
+## Question 6
+
+**Estimate the own price elasticities for each one of the store buckets/leaves using the preferred specification:**
+
+```{r 6}
+reg_int <- glm(logmove ~ logprice*brand*feat, data=oj_ids)
+summary(reg_int)
+```
+
+### Part a.)
+
+**Now estimate cross price elasticities jointly with own price elasticities. This means you must create a dataframe which has the prices of all types of OJ at the store.  (e.g., you should be able to use the Trop_Cross code you've used previously.**
+
+```{r 6.a}
+# Setting up data by getting prices for each brand
+oj_ids_dom <- filter(oj_ids, oj_ids$brand == "dominicks")
+oj_ids_mm <- filter(oj_ids, oj_ids$brand == "minute.maid")
+oj_ids_trop <- filter(oj_ids, oj_ids$brand == "tropicana")
+
+oj_leaf <- oj_ids_dom %>% 
+  rename("logprice_dom" = "logprice",
+         "logmove_dom" = "logmove")
+oj_leaf$logprice_mm <- oj_ids_mm$logprice
+oj_leaf$logmove_mm <- oj_ids_mm$logmove
+oj_leaf$logprice_trop <- oj_ids_trop$logprice
+oj_leaf$logmove_trop <- oj_ids_trop$logmove
+
+# Splitting into 3 dataframes, one for each leaf
+oj_leaf_2 <- filter(oj_leaf, oj_leaf$leaf == 2)
+oj_leaf_4 <- filter(oj_leaf, oj_leaf$leaf == 4)
+oj_leaf_5 <- filter(oj_leaf, oj_leaf$leaf == 5)
+
+```
+
+### Part b.)
+
+**You'll also have to run 3 separate regressions for each leaf for a total of nine regressions.** 
+
+```{r 6.b}
+# Regressions - Leaf 2
+model6b_dom_2 <- lm(logmove_dom ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                    oj_leaf_2)
+model6b_mm_2 <- lm(logmove_mm ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                   oj_leaf_2)
+model6b_trop_2 <- lm(logmove_trop ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                     oj_leaf_2)
+
+# Regressions - Leaf 4
+model6b_dom_4 <- lm(logmove_dom ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                    oj_leaf_4)
+model6b_mm_4 <- lm(logmove_mm ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                   oj_leaf_4)
+model6b_trop_4 <- lm(logmove_trop ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                     oj_leaf_4)
+
+# Regressions - Leaf 5
+model6b_dom_5 <- lm(logmove_dom ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                    oj_leaf_5)
+model6b_mm_5 <- lm(logmove_mm ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                   oj_leaf_5)
+model6b_trop_5 <- lm(logmove_trop ~ logprice_dom*feat + logprice_mm*feat + logprice_trop*feat,
+                     oj_leaf_5)
+```
+
+**i.) Save the coefficients for each leaf in a 3x3 matrix. The diagonals will be own price elasticities and the off diagonals will be cross price elasticities.**
+
+```{r 6.b.i}
+# Constructing matrix - Leaf 2
+print("Matrix for leaf 2:")
+mat6bi_2_r1 <- c("", "Dominicks", "Minute Maid", "Tropicana")
+mat6bi_2_r2 <- c("Dominicks",
+            tidy(model6b_dom_2)[2, "estimate"], 
+            tidy(model6b_dom_2)[3, "estimate"], 
+            tidy(model6b_dom_2)[4, "estimate"])
+mat6bi_2_r3 <- c("Minute Maid",
+            tidy(model6b_mm_2)[2, "estimate"], 
+            tidy(model6b_mm_2)[3, "estimate"], 
+            tidy(model6b_mm_2)[4, "estimate"])
+mat6bi_2_r4 <- c("Tropicana",
+            tidy(model6b_trop_2)[2, "estimate"], 
+            tidy(model6b_trop_2)[3, "estimate"], 
+            tidy(model6b_trop_2)[4, "estimate"])
+
+matrix_6bi_2 <- rbind(mat6bi_2_r1, mat6bi_2_r2, mat6bi_2_r3, mat6bi_2_r4)
+matrix_6bi_2
+
+# Constructing matrix - Leaf 4
+print("Matrix for leaf 4:")
+mat6bi_4_r1 <- c("", "Dominicks", "Minute Maid", "Tropicana")
+mat6bi_4_r2 <- c("Dominicks",
+            tidy(model6b_dom_4)[2, "estimate"], 
+            tidy(model6b_dom_4)[3, "estimate"], 
+            tidy(model6b_dom_4)[4, "estimate"])
+mat6bi_4_r3 <- c("Minute Maid",
+            tidy(model6b_mm_4)[2, "estimate"], 
+            tidy(model6b_mm_4)[3, "estimate"], 
+            tidy(model6b_mm_4)[4, "estimate"])
+mat6bi_4_r4 <- c("Tropicana",
+            tidy(model6b_trop_4)[2, "estimate"], 
+            tidy(model6b_trop_4)[3, "estimate"], 
+            tidy(model6b_trop_4)[4, "estimate"])
+
+matrix_6bi_4 <- rbind(mat6bi_4_r1, mat6bi_4_r2, mat6bi_4_r3, mat6bi_4_r4)
+matrix_6bi_4
+
+# Constructing matrix - Leaf 5
+print("Matrix for leaf 5:")
+mat6bi_5_r1 <- c("", "Dominicks", "Minute Maid", "Tropicana")
+mat6bi_5_r2 <- c("Dominicks",
+            tidy(model6b_dom_5)[2, "estimate"], 
+            tidy(model6b_dom_5)[3, "estimate"], 
+            tidy(model6b_dom_5)[4, "estimate"])
+mat6bi_5_r3 <- c("Minute Maid",
+            tidy(model6b_mm_5)[2, "estimate"], 
+            tidy(model6b_mm_5)[3, "estimate"], 
+            tidy(model6b_mm_5)[4, "estimate"])
+mat6bi_5_r4 <- c("Tropicana",
+            tidy(model6b_trop_5)[2, "estimate"], 
+            tidy(model6b_trop_5)[3, "estimate"], 
+            tidy(model6b_trop_5)[4, "estimate"])
+
+matrix_6bi_5 <- rbind(mat6bi_5_r1, mat6bi_5_r2, mat6bi_5_r3, mat6bi_5_r4)
+matrix_6bi_5
+```
+
+### Part c.)
+
+**Comment on any differences between own and cross price elasticities by leaf.**
+
+Each elasticity is in a similar ballpark to its matches across the three leaves, but the own price elasticities seem to vary more than cross-price elasticities.
+
+## Question 7
+
+**Now let's use the elasticities to think about pricing differentials.** 
+
+### Part a.)
+
+**In the leaf with the highest own-price elasticities, what should the markups be relative to the other leafs?** 
+
+The leaf with the most elastic own-price elasticities should have lower markups because consumers will be more sensitive to changes in price, so a high markup would drive away more customers than other leaves.
+
+### Part b.)
+
+**How do cross-price elasticities vary with the highest versus lowest own price elasticity leafs?** 
+
+Cross-price elasticities are highest in the lowest own-price elasticity leaves.
+
+**i.) What does this imply about differences in markups within high versus low elasticity stores across brands?**
+
+This implies that the different brands have lower markups at lower elasticity stores and higher markups at higher elasticity stores.
+
+**ii.) Can you say anything about what this means for the timing of sales? Should they occur at the same or different times across stores?**
+
+This means that sales should occur at different times across stores, so that different stores should have different degrees of sales to match differences in elasticities.

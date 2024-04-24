@@ -1,0 +1,263 @@
+---
+title: "Problem Set 2"
+author: "Zach Koverman"
+date: "2023-10-10"
+output: html_document
+---
+
+## Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Setup}
+library(ggplot2)
+library(dplyr)
+
+set.seed(22)
+
+setwd(paste0("/Users/zachkoverman/Desktop/School/",
+      "Senior Year/ECON 487 - Data Science for Strategic Pricing/Homeworks"))
+oj <- read.csv("oj.csv")
+```
+
+
+## Question 4 - Visualizing price
+a.) Make a box plot of price.
+```{r 4.a}
+ggplot(oj, aes(price)) + geom_boxplot(fill="yellow")
+```
+
+b.) Make a box plot of log price.
+```{r 4.b}
+ggplot(oj, aes(log(price))) + geom_boxplot(fill="purple")
+```
+
+c.) Make a box plot of price, but separate out each brand.
+```{r 4.c}
+ggplot(oj, aes(price,factor(brand))) + geom_boxplot(aes(fill=brand))
+```
+
+d.) Do the same for log price.
+```{r 4.d}
+ggplot(oj, aes(log(price), factor(brand))) + geom_boxplot(aes(fill=brand))
+```
+
+e.) What do these graphs tell you about the variation in price? Why do the log 
+plots look different? Do you find them more/less informative?
+
+  These graphs tell us that the overall prices vary within a range of about $1
+  50% of the time. The log plots look different because they adjust the data
+  points to all be on the same scale, removing the possibility of higher-priced
+  orange juices having higher price variation because they has more room to 
+  fluctuate. I find them about the same amount of informative; I like to be able
+  to read the specific prices on the price plots, but the log(price) plots are
+  better for comparing the differences between the brands. 
+
+
+## Question 5 - Visualizing the price/quantity relationship
+a.) Plot logmove (log quantity) vs. log(price) for each brand.  
+``` {r 5.a}
+ggplot(oj, aes(logmove, log(price))) + geom_point(aes(color = factor(brand)))
+```
+  i.) What insights can you derive that were not apparent before?
+
+  This scatterplot tells us how the quantity of each brand sold varies at 
+  different prices. The log(quantity) sold varies much more at each 
+  log(price) of Dominicks orange juice than for Minute Maid, and more for 
+  Minute Maid than for Tropicana.
+
+
+## Question 6 - Estimating the relationship
+a.) Do a regression of log quantity on log price (you can use the lm or glm
+function to do this. How well does the model fit? What is the elasticity, does 
+it make sense?
+```{r 6.a}
+model6a <- lm(logmove ~ log(price), oj)
+summary(model6a)
+```
+  The model does not fit the data very well, as the R-squared value is only
+  0.2081, which means only 20.81% of the variation is explained by the model.
+  The elasticity is -1.6, which makes sense because the scatterplot looked like
+  the quantity did not change a lot at different prices.
+
+b.) Now add in an intercept term for each brand (add brand to the regression),
+how do the results change? How should we interpret these coefficients?
+``` {r 6.b}
+model6b <- lm(logmove ~ log(price) + brand, oj)
+summary(model6b)
+```
+  The results change as the coefficient on log(price) now represents the change
+  in price of Dominicks brand orange juice, and since the other brands now have 
+  their own coefficients, we get a better understanding of how price changes 
+  for each brand as quantity increases by one percent. We interpret these 
+  coefficients as the percentage change in price that occurs with a one percent 
+  increase in quantity, and the additional percent change that is caused by the 
+  orange juice being non-Dominicks brand.
+
+
+c.) Now figure out a way to allow the elasticities to differ by brand. Search 
+“interaction terms” and “dummy variables” if you don’t remember this from 
+econometrics. Note the estimate coefficients will “offset” the base estimates. 
+What is the insights we get from this regression? What is the elasticity for 
+each firm? Do the elasticities make sense?
+``` {r 6.c}
+model6c <- lm(logmove ~ log(price) * brand, oj)
+summary(model6c)
+```
+  In this regression, the estimates for log(price) * brand represent a 
+  multiplier that each brand applies to the log(price) as price increases, 
+  which gives us the slopes and elasticities for each brand. The elasticity for 
+  Dominick's orange juice is -3.38, for Minute Maid it is -3.43, and for 
+  Tropicana it is -4.04. These make sense because Tropicana appears to have the
+  steepest downward sloping trend.
+
+
+## Question 7 - Impact of "featuring in store"
+a.) What is the average price and featured rate of each brand?
+```{r 7.a}
+grouped_oj <- oj %>% group_by(brand) %>% summarise(avg_price = mean(price), 
+                                                  feat_rate = mean(feat))
+grouped_oj
+```
+
+b.) How should we incorporate the feature variable into our regression?
+```{r 7.b}
+model7b <- lm(logmove ~ log(price) + feat, oj)
+summary(model7b)
+```
+
+c.) Now run a model where features can impact sales and price sensitivity.
+```{r 7.c}
+model7c <- lm(logmove ~ log(price) + log(price) * feat, oj)
+summary(model7c)
+```
+
+d.) Now run a model where each brand can have a different impact of being 
+featured and a different impact on price sensitivity.Produce the regression 
+results for this regression brand with brand level elasticities.
+```{r 7.d}
+model7d <- lm(logmove ~ log(price) + feat * brand + brand * log(price), oj)
+summary(model7d)
+```
+
+e.) Now add what you think are the most relevant sociodemographic controls and 
+produce the regression results from that regression as well.  
+```{r 7.e}
+model7e <- lm(logmove ~ log(price) + feat*brand + log(price)*brand + 
+             INCOME + AGE60 + EDUC, oj)
+summary(model7e)
+```
+
+
+## Question 8 - Overall analysis
+a.) Based on your work, which brand has the most elastic demand, which as the 
+least elastic?
+
+  According to the analysis above, Dominick's has the most elastic demand 
+  since its coefficient (-2.98) is the closest to 0, while Tropicana has the 
+  least elastic demand since its value is larger magnitude (-2.98 - .99 = 
+  -3.97).
+
+b.) Do the average prices of each good match up with these insights?
+
+  The average prices of each good do match up with these insights. Since the 
+  elasticity is the percentage change in quantity over the percentage change in 
+  price, higher average-price brands would probably have lower percentage 
+  changes in price which would correspond to greater inelasticity.
+
+c.) Take average prices for each brand. Use the elasticity pricing formula (you 
+can use average values from your analysis above) to “back out” unit costs for 
+each brand. Do the unit costs appear to be the same or different? What are your 
+insights/reactions?
+``` {r 8.c}
+## Formula: p = (e / (e-1)) * marg_cost
+##          p / (e / (e-1)) = marg_cost
+##          ( p*(e-1) / e)   = marg_cost
+
+mcost_dom <- (-2.98 / (-2.98 - 1)) * 1.74
+mcost_mm <- (-3.33 / (-3.33 - 1)) * 2.24
+mcost_trop <- (-3.97 / (-3.97 - 1)) * 2.87
+```
+  
+  The unit costs appear to be different, increasing with the price level of 
+  each brand. This makes sense to me, since the more expensive brands may 
+  distinguish themselves from others by using higher quality, more expensive 
+  (such as organic) oranges. However, I would not have been very surprised if 
+  the marginal costs turned out to be the same, implying each brand likely 
+  makes their orange juice the same way.
+
+## Question 9 - Investigate how store demographics are related to demand
+a.) Take one of the final models from (7) and add in the store demographics as linear features (e.g. + demo1 + demo2). Report your output.
+```{r 9.a}
+model9a <- lm(logmove ~ log(price)+ (feat*brand) + (log(price)*brand) + AGE60 +
+             EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST +
+             SSTRVOL + CPDIST5 + CPWVOL5, oj)
+summary(model9a)
+```
+
+b.) What demographics significantly influence demand?
+  All of the demographics included in this regression model significantly 
+  influence demand. 
+
+c.) Use the predict command to determine how well the model predicts logmove 
+and create a new variable called logmove_hat. To do so construct the "fair r^2" 
+covered in class. What is the improvement relative to the model without the 
+demographic features?
+```{r 9.c}
+logmove_hat <- predict(model9a, data=oj)
+fair_r2 <- (cor(logmove_hat, oj$logmove))^2
+
+# Calculating difference in r^2
+diff_r2 <- fair_r2 - .2081
+```
+  
+  Since the fair R^2 we calculated here has a value of 0.5778, while the R^2 we 
+  calculated earlier has a value of about 0.2081, we can see that the model
+  with demographic features captures about 37% more of the variation in 
+  quantity.
+
+d.) Rather than using fair r^2 lets now use a test set to determine which model 
+gives the best out of sample prediction.
+  i.) Create a new dataframe which is a random subset of 80% of the data.
+```{r 9.di}
+oj_train <- sample_frac(oj, size=.8)
+oj_test <- anti_join(oj, oj_train)
+```
+
+  ii.) Estimate the model with and without demographic characteristics. 
+  Construct MSE for the training and test set for the models.
+```{r 9.dii}
+model9d <- lm(logmove ~ log(price)+ (feat*brand) + 
+              (log(price)*brand), oj_train)
+model9d_dem <- lm(logmove ~ log(price)+ (feat*brand) + (log(price)*brand) + 
+                  AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + 
+                  HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5, oj_train)
+
+model9d_hat_train <- predict(model9d, newdata=oj_train)
+model9d_hat_test <- predict(model9d, newdata=oj_test)
+model9d_dem_hat_train <- predict(model9d_dem, newdata=oj_train)
+model9d_dem_hat_test <- predict(model9d_dem, newdata=oj_test)
+
+df_hat_train <- data.frame(pred = model9d_hat_train, 
+                                  actual = oj_train$logmove)
+df_hat_test <- data.frame(pred = model9d_hat_test, 
+                                  actual = oj_test$logmove)
+df_dem_hat_train <- data.frame(pred = model9d_dem_hat_train, 
+                                  actual = oj_train$logmove)
+df_dem_hat_test <- data.frame(pred = model9d_dem_hat_test, 
+                                  actual = oj_test$logmove)
+
+mse_hat_train <- mean((df_hat_train$actual - df_hat_train$pred)^2)
+mse_hat_test <- mean((df_hat_test$actual - df_hat_test$pred)^2)
+mse_hat_dem_train <- mean((df_dem_hat_train$actual - df_dem_hat_train$pred)^2)
+mse_hat_dem_test <- mean((df_dem_hat_test$actual - df_dem_hat_test$pred)^2)
+```
+
+  iii.) Compare the out of sample MSE for the models. Which is lower implying 
+  the model does a better job of fitting the data?
+  
+  Out of sample (test) MSE for the model without demographics: 0.499
+  Out of sample (test) MSE for the model with demographics:0.440
+  The out-of-sample MSE is lower for the model with demographics, which means 
+  that the model including demographics fits the data more accurately.

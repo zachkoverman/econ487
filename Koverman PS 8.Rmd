@@ -1,0 +1,624 @@
+---
+title: "Koverman PS 8"
+author: "Zach Koverman"
+date: "2023-11-27"
+output: html_document
+---
+
+# Problem Set 8
+
+## Setup
+
+```{r Setup Chunk 1}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(openxlsx)
+library(stringr)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(permute)
+library(maptree)
+library(randomForest)
+library(glmnet)
+library(xgboost)
+library(ggplot2)
+library(ggthemes)
+library(broom)
+library(tidyr)
+library(plyr)
+library(dplyr)
+
+options(dplyr.summarise.inform = FALSE)
+
+set.seed(22)
+```
+
+```{r Setup Chunk 2}
+# Setting up the OJ data set
+setwd(paste0("/Users/zachkoverman/Desktop/School/",
+      "Senior Year/ECON 487 - Data Science for Strategic Pricing/Homeworks"))
+oj <- read.csv("oj.csv")
+oj$logprice <- log(oj$price)
+# Creating lagged variables
+oj_lagged <- oj %>% 
+  arrange(week) %>% # sorting by week
+  group_by(store, brand) %>% # need groupby to only lag within each store & brand combo
+  mutate(lag_price = ifelse(lag(week) + 1 == week, lag(logprice), NA)) %>% # check for min before lag
+  mutate(lag_feat = ifelse(lag(week) + 1 == week, lag(feat), NA)) %>%
+  mutate(lag_move = ifelse(lag(week) + 1 == week, lag(logmove), NA)) %>%
+  ungroup() %>% # undoes groupby
+  mutate(store = factor(store)) %>%
+  mutate(week = factor(week)) %>%
+  mutate(id = row_number()) %>%
+  drop_na()
+```
+
+## Question 1
+
+**Update your Double ML code to incorporate the regression tree classification you did to classify stores into three "leaves".**
+
+### Part a.)
+
+**The code should start with classification (the regression tree) and then you should estimate\
+a random forest/gradient boosted tree for stores in each leaf-brand-price and leaf-brand-\
+quantity (18 forests, using our 3 leaf specification). You'll then create a 3x3 elasticity matrix\
+for each leaf (so three matrices).**
+
+```{r 1.a}
+# Regression tree to split into three leaves
+oj_leaves <- subset(oj_lagged, select = -c(price))
+dataToPass <- oj_leaves[, c("logmove","AGE60","EDUC","ETHNIC","INCOME","HHLARGE",
+                            "WORKWOM","HVAL150","SSTRDIST","SSTRVOL","CPDIST5","CPWVOL5")]
+
+fit_1a <- rpart(as.formula(logmove ~ .),data=dataToPass,method="anova",cp=0.009)
+oj_leaves$leaf = fit_1a$where
+unique(oj_leaves$leaf) # After guessing and checking, cp=0.009 results in 3 leaves
+```
+
+### Part b.)
+
+**Make sure you have a robust set of features (e.g., make and use a bunch!) for use in building\
+the random forests/gradient boosted tree.**
+
+```{r 1.b Chunk 1, cache=TRUE}
+# Creating empty dataframe to be added to by for loop
+oj_lagged_resid <- data.frame()
+
+# For loop for each leaf
+for (i in  c(2, 4, 5)) {
+  # Filter to just leaf i, then split into two halves
+  print(paste("Starting leaf", i)) 
+  oj_i <- filter(oj_leaves, leaf == i)
+  fold_1 <- sample_frac(oj_i, size = .5)
+  fold_2 <- anti_join(oj_i, fold_1)
+  
+  # XGBoost to estimate Q (logmove) --------------------------------------------------------------------------
+  print("Now estimating Q with XGBoost")
+  formula_q <- formula("logmove ~ brand + AGE60 + HHLARGE + EDUC + WORKWOM +
+                         HVAL150 + SSTRDIST + SSTRVOL + store + week + lag_move + lag_price + 
+                         lag_feat + lag_price*lag_feat*lag_move*brand") # no current feat, price for double ML
+  
+  ## Building XGBoost model for fold 1
+  print("Fold 1:")
+  lm_q_fold1 <- lm(formula_q, data=fold_1)
+  X_q_fold1 <- model.matrix(lm_q_fold1)
+  xgb_matrix_q_fold1 <- xgb.DMatrix(data=X_q_fold1, label=fold_1$logmove)
+  cv_q_fold1 <- xgb.cv(data = xgb_matrix_q_fold1,
+                     nfold = 5,
+                     nrounds = 12000,
+                     early_stopping_rounds = 5,
+                     print_every_n = 100)
+  xgb_q_model_fold1 <- xgboost(data=xgb_matrix_q_fold1, 
+                       nrounds=cv_q_fold1$best_iteration,
+                       print_every_n = 100)
+  
+  ## Doing XGBoost model for fold 2
+  print("Fold 2:")
+  lm_q_fold2 <- lm(formula_q, data=fold_2)
+  X_q_fold2 <- model.matrix(lm_q_fold2)
+  xgb_matrix_q_fold2 <- xgb.DMatrix(data=X_q_fold2, label=fold_2$logmove)
+  cv_q_fold2 <- xgb.cv(data = xgb_matrix_q_fold2,
+                     nfold = 5,
+                     nrounds = 12000,
+                     early_stopping_rounds = 5,
+                     print_every_n = 100)
+  xgb_q_model_fold2 <- xgboost(data=xgb_matrix_q_fold2, 
+                       nrounds=cv_q_fold2$best_iteration,
+                       print_every_n = 100)
+  
+  ## Predictions for each fold on the other fold
+  print("Making predictions and calculating residuals")
+  fold_2$xgb_pred_q_fold2 <- predict(xgb_q_model_fold1, newdata=xgb_matrix_q_fold2)
+  fold_1$xgb_pred_q_fold1 <- predict(xgb_q_model_fold2, newdata=xgb_matrix_q_fold1)
+  
+  ## Calculating residuals
+  fold_1$resid_q <- fold_1$logmove - fold_1$xgb_pred_q_fold1
+  fold_2$resid_q <- fold_2$logmove - fold_2$xgb_pred_q_fold2
+  
+  
+  
+  # XGBoost to estimate P (logprice) -------------------------------------------------------------------------
+  print("Now estimating P with XGBoost")
+  formula_p <- formula("logprice ~ brand + AGE60 + HHLARGE + EDUC + WORKWOM +
+                       HVAL150 + SSTRDIST + SSTRVOL + store + week + lag_move + lag_price + 
+                       lag_feat + lag_price*lag_feat*lag_move*brand") # no current feat, price for double ML
+  
+  ## Building XGBoost model for fold 1
+  print("Fold 1:")
+  lm_p_fold1 <- lm(formula_p, data=fold_1)
+  X_p_fold1 <- model.matrix(lm_p_fold1)
+  xgb_matrix_p_fold1 <- xgb.DMatrix(data=X_p_fold1, label=fold_1$logprice)
+  cv_p_fold1 <- xgb.cv(data = xgb_matrix_p_fold1,
+                     nfold = 5,
+                     nrounds = 12000,
+                     early_stopping_rounds = 5,
+                     print_every_n = 100)
+  xgb_p_model_fold1 <- xgboost(data=xgb_matrix_p_fold1, 
+                       nrounds=cv_p_fold1$best_iteration,
+                       print_every_n = 100)
+  
+  ## Doing XGBoost model for fold 2
+  print("Fold 2:")
+  lm_p_fold2 <- lm(formula_p, data=fold_2)
+  X_p_fold2 <- model.matrix(lm_p_fold2)
+  xgb_matrix_p_fold2 <- xgb.DMatrix(data=X_p_fold2, label=fold_2$logprice)
+  cv_p_fold2 <- xgb.cv(data = xgb_matrix_p_fold2,
+                     nfold = 5,
+                     nrounds = 12000,
+                     early_stopping_rounds = 5,
+                     print_every_n = 100)
+  xgb_p_model_fold2 <- xgboost(data=xgb_matrix_p_fold2, 
+                       nrounds=cv_p_fold2$best_iteration,
+                       print_every_n = 100)
+  
+  ## Predictions for each fold on the other fold
+  print("Making predictions and calculating residuals")
+  fold_2$xgb_pred_p_fold2 <- predict(xgb_p_model_fold1, newdata=xgb_matrix_p_fold2)
+  fold_1$xgb_pred_p_fold1 <- predict(xgb_p_model_fold2, newdata=xgb_matrix_p_fold1)
+  
+  ## Calculating residuals
+  fold_1$resid_p <- fold_1$logprice - fold_1$xgb_pred_p_fold1
+  fold_2$resid_p <- fold_2$logprice - fold_2$xgb_pred_p_fold2
+  
+  
+  
+  # Binding folds together and adding to dataframe
+  bound_folds <- bind_rows(list(fold_1, fold_2))
+  oj_lagged_resid <- bind_rows(list(oj_lagged_resid, bound_folds))
+}
+
+print("Done!")
+```
+
+```{r 1.b Chunk 2}
+# Pivoting dataframe
+pivoted <- oj_lagged_resid %>%
+  select(store, week, brand, resid_q, resid_p) %>%
+  pivot_wider(
+    id_cols = c(store, week),
+    names_from = brand,
+    values_from = resid_p
+  )
+  
+wide_oj <- merge(oj_lagged_resid, pivoted, by = c("store", "week"))
+
+# Function to create elasticity matrix of 3 brands for a given leaf and dataframe
+elasticity_matrix <- function(leaf_num, data) {
+  data_new <- filter(data, leaf == leaf_num)
+  
+  ## Filtering data to each brand
+  oj_dom <- filter(data_new, brand == 'dominicks')
+  oj_mm <- filter(data_new, brand == 'minute.maid')
+  oj_trop <- filter(data_new, brand == 'tropicana')
+  
+  ## Regressions for cross-price elasticities
+  reg_dom <- lm(resid_q ~ dominicks + minute.maid + tropicana, oj_dom)
+  reg_mm <- lm(resid_q ~ dominicks + minute.maid + tropicana, oj_mm)
+  reg_trop <- lm(resid_q ~ dominicks + minute.maid + tropicana, oj_trop)
+  
+  ## Setting up a crude cross-price elasticity matrix
+  cpe_matrix <- reg_dom$coefficients[2:4]
+  cpe_matrix <- bind_rows(cpe_matrix, reg_mm$coefficients[2:4])
+  cpe_matrix <- bind_rows(cpe_matrix, reg_trop$coefficients[2:4])
+  cpe_matrix$brand <- c("dominicks", "minute maid", "tropicana")
+  cpe_matrix <- cpe_matrix[, c("brand", "dominicks", "minute.maid", "tropicana")]
+  
+  return(cpe_matrix)
+}
+
+# Calling function for each leaf
+elasticity_matrix(2, wide_oj)
+elasticity_matrix(4, wide_oj)
+elasticity_matrix(5, wide_oj)
+```
+
+### Part c.)
+
+**Compare the residuals from one of the forests/gradient boosted trees to a simple OLS model\
+with the same RHS variables using a scatter plot. Does the Forest/gradient boosted tree\
+beat OLS?**
+
+```{r 1.c}
+# OLS with same RHS
+ols_q <- lm(logmove ~ brand + AGE60 + HHLARGE + EDUC + WORKWOM + HVAL150 +
+            SSTRDIST + SSTRVOL + store + week + lag_move + lag_price + lag_feat +
+            lag_price*lag_feat*lag_move*brand, wide_oj)
+ols_p <- lm(logprice ~ brand + AGE60 + HHLARGE + EDUC + WORKWOM +
+            HVAL150 + SSTRDIST + SSTRVOL + store + week + lag_move + lag_price + 
+            lag_feat + lag_price*lag_feat*lag_move*brand, wide_oj)
+
+# Plotting
+plot_data <- wide_oj
+plot_data$resid_ols_q <- ols_q$residuals
+plot_data$resid_ols_p <- ols_p$residuals
+
+plot_resid_xgb <- ggplot(data = plot_data, mapping = aes(x = resid_q)) + 
+                         geom_point(aes(y = resid_p), 
+                                    color = "darkslategray4",
+                                    alpha = .3,
+                                    size = 1) + 
+                         facet_grid(. ~ leaf) +
+                         labs(title = "XGB Residuals", x = "Q Residuals", y = "P Residuals")
+
+plot_resid_ols <- ggplot(data = plot_data, mapping = aes(x = resid_ols_q)) + 
+                         geom_point(aes(y = resid_ols_p), 
+                                    color = "maroon",
+                                    alpha = .3,
+                                    size = 1) + 
+                         facet_grid(. ~ leaf) +
+                         labs(title = "OLS Residuals", x = "Q Residuals", y = "P Residuals")
+
+plot_resid_xgb
+plot_resid_ols
+```
+
+Yes, XGBoost beats OLS, as illustrated by the fact that the XGBoost residuals are much more compact and closer to the the origin of these graphs.
+
+## Question 2
+
+**Suppose a firm offers a free trial for two months and has acquisition rate of 0.3, a conversion rate of\
+0.5, nobody buys the premium version directly (buy high rate=0), they make \$10 per month if a\
+customer converts, marginal costs per month are \$5 and the average customer lifetime is 12 months.\
+Suppose there are 1 million customers in their market.**
+
+### Part a.)
+
+**What is their total revenue currently?**
+
+```{r 2.a}
+N <- 1000000 # 1 million customers in market
+m_l <- 0 # company earns 0 revenue from free users
+a <- .3 # acquisition rate
+b <- 0 # buy high rate
+c <- .5 # conversion rate
+p_h <- 10*(10/12) # $10 per conversion per month avged by 12 month avg lifetime
+
+TR <- (N*a*(1-c)*m_l) + (((N*a*c) + (N*b)) * p_h)
+print(paste0("The company earns $", TR, " per month"))
+```
+
+The company's total revenue is \$1,250,000 per month.
+
+### Part b.)
+
+**What are total costs (assume FC=0)?**
+
+```{r 2.b}
+Fixed <- 0 # Fixed costs = 0
+mc <- 5 # MC is $5 per month
+
+TC <- Fixed + (mc*(N*(a+b))*(2/12)) + (mc*(N*(a*c+b))*(10/12)) # 2 mo w/ 30% of pop, then 10 w/ 15% pop
+print(paste0("The company spends $", TC, " per month"))
+```
+
+The company's total costs is \$875,000 per month.
+
+### Part c.)
+
+**Based on this, what is gross margin (e.g., profits not accounting for fixed costs). Suppose\
+fixed costs are 1 million. What is net margin (overall profits)?**
+
+```{r 2.c}
+gross_margin <- TR - TC
+net_margin <- TR - (TC + 1000000)
+
+print(paste0("Gross margin: ", gross_margin))
+print(paste0("Net margin: ", net_margin))
+```
+
+The company's gross margin is \$375,000 and its net margin is -\$625,000.
+
+### Part d.)
+
+**They are considering reducing the length of the free trial to 1 month. Their data science\
+team estimates the conversion rate will drop to 0.45 and the acquisition rate will drop to\
+0.28, what is the new revenue, new costs, and gross margins? Should they make the\
+change?**
+
+```{r 2.d}
+c <- .45
+a <- .28
+p_h <- 10*(10/11)
+
+TR <- (N*a*(1-c)*m_l) + (((N*a*c) + (N*b)) * p_h)
+TC <- Fixed + (mc*(N*(a+b))*(1/12)) + (mc*(N*(a*c+b))*(11/12)) # 1 mo w/ 28% of pop, then 11 w/ (.45 * .28)
+gross_margin <- TR - TC
+
+print(paste0("Total revenue: ", TR))
+print(paste0("Total cost: ", TC))
+print(paste0("Gross margin: ", gross_margin))
+```
+
+After doing this, the company's total revenue will be about \$1,145,454.55 per month, its total costs will be about \$694,166.67 per month, and its gross margin will be about \$451,287.88 per month. The company should make this change because it will be increasing its gross margin.
+
+## Question 3
+
+**Read the Online retail data into R. This is real anonymized purchase level data from a wholesaler in\
+the UK.**
+
+```{r 3}
+rtl <- read.xlsx("online_retail.xlsx")
+
+# Cleaning Data
+rtl <- rtl %>%
+  mutate(InvoiceDate = convertToDate(InvoiceDate)) %>%
+  drop_na()
+
+rtl_nice <- rtl %>%
+  mutate(InvoiceDate = convertToDate(InvoiceDate)) %>%
+  drop_na() %>%
+  filter(UnitPrice > 0) %>%
+  filter(Quantity > 0) %>%
+  filter(str_detect(StockCode,"^[0-9]+$"))
+```
+
+### Part a.)
+
+**Calculate summary statistics including total number of unique customers, total number of\
+unique countries, total revenue by country and average revenue by customer-country.**
+
+```{r 3.a}
+summstats <- summary(rtl)
+num_customers_unique <- length(unique(rtl$CustomerID))
+num_countries_unique <- length(unique(rtl$Country))
+rtl %>%
+  group_by(Country) %>%
+  summarise(total_rev = sum(UnitPrice)) %>%
+  ungroup()
+cols <- c("CustomerID", "Country")
+rtl %>%
+  group_by(across(all_of(cols))) %>%
+  summarise(avg_rev = mean(UnitPrice))
+
+summstats
+print(paste0("# of unique customers: ", num_customers_unique))
+print(paste0("# of unique countries: ", num_countries_unique))
+```
+
+### Part b.)
+
+**In addition to averages plot the distribution of total revenue by customer using ggplot2.**
+
+```{r 3.b}
+# Calculating customer-level revenue
+rtl_cust_rev <- rtl %>%
+  group_by(CustomerID) %>%
+  summarise(cust_rev = sum(UnitPrice * Quantity)) %>% 
+  arrange(cust_rev) %>%
+  filter(cust_rev > 0) %>%
+  mutate(log_cust_rev = log(cust_rev))
+rtl_cust_rev
+
+ggplot(rtl_cust_rev, aes(x=log_cust_rev)) + 
+  geom_histogram(binwidth=.6, color="black", fill="papayawhip") + # bindwith=.6 makes 20 bins
+  geom_vline(aes(xintercept=mean(log_cust_rev, na.rm=T)),
+             color="deeppink4", linetype="dashed")
+
+```
+
+### Part c.)
+
+**What percent of customers account for 80% of total revenue over the sample (Hint: calculate customer-level revenue, as above, sort from least to most revenue, use the cumsum() function in R, and use the output to compare to total revenue to get the percentiles).**
+
+```{r 3.c}
+total_rev <- sum(rtl_cust_rev$cust_rev)
+rtl_cust_rev_pctiles <- (cumsum(rtl_cust_rev$cust_rev) / total_rev)
+
+rtl_cust_rev_80 <- rtl_cust_rev_pctiles[rtl_cust_rev_pctiles < .80]
+rtl_80pct_rev <- length(rtl_cust_rev_80) / length(rtl_cust_rev_pctiles)
+print(paste0("Percent of customers who make up 80% of the revenue: ", 100*rtl_80pct_rev))
+```
+
+### Part d.)
+
+**Define customer churn as having no purchases for three months. What is the monthly churn\
+rate? Of customers who churn based upon that definition, what share of them purchase\
+again?**
+
+```{r 3.d, cache=TRUE}
+# Setting up dataframe
+rtl_3d <- rtl %>%
+  arrange(CustomerID) %>%
+  filter(Quantity > 0) %>%
+  filter(UnitPrice > 0) %>%
+  mutate(Date = as.character(InvoiceDate)) %>%
+  group_by(CustomerID, InvoiceNo, InvoiceDate) %>% 
+  summarize(rev = sum(UnitPrice * Quantity)) %>%
+  mutate(churn = FALSE) %>%
+  mutate(unchurn = FALSE) %>%
+  mutate(next_date = NULL)
+
+# Adjusting next_date column to next date from row of data (avoiding as much looping as I can)
+end_date <- as.Date(max(rtl_3d$InvoiceDate)) + 1 # Plus 1 to have it after end of data
+next_date_vector <- rtl_3d$InvoiceDate[-1]
+next_date_vector <- append(next_date_vector, end_date)
+rtl_3d$next_date <- next_date_vector
+
+# For loop to last next_date of a CustomerID to the end date from date of next ID
+for (i in (1:length(rtl_3d$CustomerID))) {
+  this_cust_id <- as.character(rtl_3d[i, "CustomerID"])
+  next_cust_id <- as.character(rtl_3d[i+1, "CustomerID"])
+  
+  # Updating every 1000 rows to tell how fast code is running
+  if (i %% 2000 == 0) {
+    print(paste0("[3.d] Updated through row: ", i))
+  }
+
+  # If the row is the last of the customer ID, make the next date the end_date
+  if (this_cust_id != next_cust_id) {
+    rtl_3d[i, "next_date"] <- end_date
+  }
+}
+
+# If diff btwn next date and invoice date is more then 90 days, cust churned (churn = TRUE)
+rtl_3d$churn <- ((rtl_3d$next_date - rtl_3d$InvoiceDate) > 90)
+# If the next date is not end date, cust purchased again (unchurn = TRUE)
+rtl_3d$unchurn <- (rtl_3d$next_date != end_date)
+
+# Updating dataset, grouping by customer and setting if they ever churn or unchurn
+rtl_3d <- rtl_3d %>%
+  mutate(churn = any(churn == TRUE)) %>%
+  mutate(unchurn = any(unchurn == TRUE))
+
+# Calculating churn rate and "unchurn" rate
+rtl_3d_churned <- rtl_3d %>% 
+  filter(churn == TRUE) %>%
+  group_by(CustomerID)
+num_churn_3d <- length(rtl_3d_churned$CustomerID)
+churn_rate_3d <- num_churn_3d / length(unique(rtl_3d$CustomerID))
+
+rtl_3d_unchurned <- filter(rtl_3d_churned, unchurn == TRUE)
+num_unchurn_3d <- length(rtl_3d_unchurned$CustomerID)
+unchurn_rate_3d <- num_unchurn_3d / num_churn_3d
+
+print(paste0("Share of customers who churn: ", 100*churn_rate_3d))
+print(paste0("Share of churned customers who purchage again: ", 100*unchurn_rate_3d))
+```
+
+The churn rate is 74.62%, and the share of those customers who purchase again is 55.02%.
+
+### Part e.)
+
+**What is the LTV of a customer (in terms of revenue)?**
+
+```{r 3.e}
+rtl_3e <- rtl_3d %>%
+  group_by(CustomerID) %>%
+  summarise(tot_rev = sum(rev))
+avg_rev_per_cust <- mean(rtl_3e$tot_rev)
+
+ltv_3e <- (avg_rev_per_cust / (1 - (churn_rate_3d - unchurn_rate_3d)))
+print(paste0("Lifetime value of a customer in terms of revenue: ", ltv_3e))
+```
+
+The lifetime value of a customer (in terms of revenue) is \$2,555.04.
+
+### Part f.)
+
+**Can you identify returns in this data? If so, what percentage of orders are returned, and\
+what fraction of total revenue is returned?**
+
+```{r 3.f}
+rtl_3f_returns <- filter(rtl, Quantity < 0)
+rtl_3f_orders <- filter(rtl, Quantity > 0)
+num_orders <- length(unique(rtl_3f_orders$InvoiceNo))
+num_returned <- length(unique(rtl_3f_returns$InvoiceNo))
+rev_returned <- sum(rtl_3f_returns$UnitPrice * rtl_3f_returns$Quantity)
+pct_orders_returned <- 100*(num_returned / num_orders)
+pct_rev_returned <-  100*(abs(rev_returned) / total_rev)
+
+print(paste0("Percentage of orders returned: ", pct_orders_returned))
+print(paste0("Percentage of revenue returned: ", pct_rev_returned))
+```
+
+Returns appear in the data as rows of invoice numbers where the quantity is negative. About 19.71% of orders are returned and 7.35% of revenue is returned.
+
+## Question 4
+
+**How does time of year impact order values?**
+
+### Part a.)
+
+**Summarize average number of sales per day and average revenue per day by month and\
+year.**
+
+```{r 4.a}
+rtl_4a <- mutate(rtl, rev = UnitPrice * Quantity)
+rtl_4a <- rtl_4a %>% 
+  mutate(Date = as.character(InvoiceDate)) %>%
+  group_by(Date) %>%
+  summarize(daily_rev = sum(rev), daily_sales = length(InvoiceNo)) %>%
+  mutate(month_yr = substr(Date, 0, 7)) %>%
+  group_by(month_yr) %>%
+  summarize(mean_rev = mean(daily_rev), mean_sales = mean(daily_sales))
+```
+
+### Part b.)
+
+**Plot each on its own graph.**
+
+```{r 4.b}
+plot_4b_rev <- ggplot(rtl_4a, aes(x = month_yr, y = mean_rev)) + 
+  geom_col(fill = "lightgreen", color = "black") + 
+  labs(x = "Year-Month", y = "Mean Daily Revenue ($)", title = "Mean Daily Revenue by Month")
+plot_4b_sales <- ggplot(rtl_4a, aes(x = month_yr, y = mean_sales)) + 
+  geom_col(fill = "thistle", color = "black") + 
+  labs(x = "Year-Month", y = "Mean Sales ($)", title = "Mean Daily Sales by Month")
+
+plot_4b_rev
+plot_4b_sales
+```
+
+### Part c.)
+
+**The CEO of the company explains to you that they have the best ad strategy in the business.\
+They only advertise close to the holidays (November and December) and those ads result in\
+huge spikes in sales compared to when they're not advertising. Do you agree with her?\
+What would your response be?**
+
+I do not agree with her. This could just be due to the fact that people shop more during the wintertime and the holidays are likely inducing more sales. We would need to investigate the level of sales during the holidays without advertising to know. Just because advertising is correlated with high sales, doesn't mean this is a causal relationship.
+
+## Question 5
+
+**We want to divide the customers into cohorts.**
+
+### Part a.)
+
+**Sort customers into "cohorts" based on the month and year of their earliest purchase (so all\
+customers who first purchased today would be in a November 2023 cohort.**
+
+```{r 5.a}
+rtl_5a_ret <- rtl_3f_returns %>%
+  group_by(CustomerID) %>%
+  mutate(cohort = substr(as.character(min(InvoiceDate)), 0, 7))
+rtl_5a_ord <- rtl_3f_orders %>%
+  group_by(CustomerID) %>%
+  mutate(cohort = substr(as.character(min(InvoiceDate)), 0, 7))
+```
+
+### Part b.)
+
+**How do metrics like number of orders, size of orders, number of returns, and size of returns\
+vary across the cohorts?**
+
+```{r 5.b}
+rtl_5b_ret <- rtl_5a_ret %>%
+  group_by(cohort) %>%
+  summarize(num_returns = n_distinct(InvoiceNo), size_returns = sum(Quantity))
+rtl_5b_ord <- rtl_5a_ord %>%
+  group_by(cohort) %>%
+  summarize(num_orders = n_distinct(InvoiceNo), size_orders = sum(Quantity))
+
+rtl_5b <- merge(rtl_5b_ret, rtl_5b_ord, by="cohort")
+rtl_5b$frac_num_returned <- (rtl_5b$num_returns / rtl_5b$num_orders)
+```
+
+All of the metrics are greater in magnitude for the cohorts who first purchase items around the winter months. Cohorts that first purchase items in December especially, but also January, February, and March tend to buy much more and return a much lower portion of it than other months.
+
+### Part c.)
+
+**Using your evidence from (a) and (b), discuss the intuition of introducing subscription levels\
+and what the impact on each cohort would be.**
+
+Higher subscription levels should be targeted to December and wintertime cohorts, while lower/free subscription levels should be targets to other cohorts to try and convert them. December and winter cohorts would likely be fine with a higher level subscription, since they are more loyal and seem to like the store more (order more and return less) while the other cohorts would be fine with a lower level subscription because they are less loyal customers (order less and return more of it).

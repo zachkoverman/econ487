@@ -1,0 +1,191 @@
+---
+title: "Koverman PS 6"
+author: "Zach Koverman"
+date: "2023-11-06"
+output: html_document
+---
+
+# Problem Set 6
+
+## Setup
+
+```{r Setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(randomForest)
+library(glmnet)
+library(xgboost)
+library(ggplot2)
+library(ggthemes)
+library(broom)
+library(tidyr)
+library(plyr)
+library(dplyr)
+
+options(dplyr.summarise.inform = FALSE)
+
+set.seed(22)
+
+setwd(paste0("/Users/zachkoverman/Desktop/School/",
+      "Senior Year/ECON 487 - Data Science for Strategic Pricing/Homeworks"))
+oj <- read.csv("oj.csv")
+
+oj$logprice <- log(oj$price)
+oj_train <- sample_frac(oj, size=.8)
+oj_test <- anti_join(oj, oj_train)
+```
+
+## Question 1
+
+**Estimate a random forest model and compare the MSE with the same LASSO model\
+when predicting sales. Try to make a complicated model. Remember that you have\
+to install the randomForest package.**
+
+### Part a.)
+
+```{r 1.a}
+oj_rf <- randomForest(logmove ~ logprice*brand*feat*AGE60*HHLARGE*EDUC*WORKWOM +
+                            HVAL150 + SSTRDIST + SSTRVOL,
+                            data = oj_train,
+                            ntree = 100, 
+                            keep.forest = TRUE)
+oj_rf_pred_train <-  predict(oj_rf, newdata=oj_train)
+oj_rf_pred_test <-  predict(oj_rf, newdata=oj_test)
+
+oj_rf_train_MSE <- mean((oj_rf_pred_train - oj_train$logmove)^2)
+oj_rf_test_MSE <- mean((oj_rf_pred_test - oj_test$logmove)^2)
+```
+
+### Part b.)
+
+**Try to plot observed versus predicted using ggplot.**
+
+```{r 1.b}
+oj_test$rf_pred <- oj_rf_pred_test
+obs_v_pred <- ggplot(data = oj_test, mapping = aes(x = logmove)) + 
+              geom_point(aes(y = rf_pred), 
+                         color = "springgreen4",
+                         alpha = .3,
+                         size = 1) + 
+              geom_abline(slope = 1, intercept = 0, 
+                         color = "black")
+obs_v_pred
+```
+
+### Part c.)
+
+**Compare to your complicated LASSO model from the previous problem set for\
+the MSE. Remember to hold out data so your random forest MSE is fair!**
+
+```{r 1.c}
+formula2 <- formula('logmove ~ logprice + brand + brand*logprice + brand*feat + brand*feat*logprice + INCOME + EDUC + HHLARGE + WORKWOM + AGE60 + feat + AGE60*INCOME + AGE60*logprice + EDUC*logprice + HHLARGE*logprice + WORKWOM*logprice + HHLARGE*WORKWOM + EDUC*WORKWOM + INCOME*WORKWOM + INCOME*HHLARGE')
+
+model2 <- lm(formula2, data=oj)
+X2 <- model.matrix(model2)
+
+model_lasso_train <- lm(formula2, data=oj_train)
+model_lasso_test <- lm(formula2, data=oj_test)
+lasso_matrix_train <- model.matrix(model_lasso_train)
+lasso_matrix_test <- model.matrix(model_lasso_test)
+
+lasso_train <- glmnet(x=lasso_matrix_train, y=oj_train$logmove, alpha=1)
+
+oj_lasso_pred_train <- predict(lasso_train, newx=lasso_matrix_train)
+oj_lasso_pred_test <- predict(lasso_train, newx=lasso_matrix_test)
+
+oj_lasso_train_MSE <- mean((oj_lasso_pred_train - oj_train$logmove)^2)
+oj_lasso_test_MSE <- mean((oj_lasso_pred_test - oj_test$logmove)^2)
+```
+
+The LASSO model from the previous problem set had a train MSE of about 0.522 and a test MSE of about 0.537. This random forest model has a train MSE 0.256 and a test MSE of 0.335. This is a big difference and means that random forest is a much better model for predicting our data than LASSO.
+
+## Question 2
+
+**We're going to do some basic exploration with xgboost.**
+
+### Part b.)
+
+**Divide the data into a training set (80% of the data) and a hold-out set (20% of the data).**
+
+(See Setup)
+
+### Part c.)
+
+**We're going to train a model to predict logmove. To do this, we're going to create a\
+training and testing matrix that we can give to the package to do cross validation on.**
+
+**i.) Use the xgb.DMatrix function to create a train and test matrix. This\
+function takes arguments "data" (must be a matrix, so consider using the\
+model.matrix command) and "label" (the outcome, logmove in our case).**
+
+```{r 2.c.i}
+formula1 <- formula("logmove ~ logprice*brand*feat*AGE60*HHLARGE*EDUC*WORKWOM + HVAL150 +
+                      SSTRDIST + SSTRVOL")
+model_train <- lm(formula1, data=oj_train)
+model_test <- lm(formula1, data=oj_test)
+X_train <- model.matrix(model_train)
+X_test <- model.matrix(model_test)
+
+xgb_matrix_train <- xgb.DMatrix(data=X_train, label=oj_train$logmove)
+xgb_matrix_test <- xgb.DMatrix(data=X_test, label=oj_test$logmove)
+```
+
+**ii.) Use the xgb.cv function to do 5-fold cross-validation on our training data.\
+We'll just use the defaults for most of the hyperparameters. A few useful\
+arguments: nfold, nrounds, early_stopping_rounds, print_every_n**
+
+```{r 2.c.ii}
+cv_train <- xgb.cv(data = xgb_matrix_train,
+                   nfold = 5,
+                   nrounds = 12000,
+                   early_stopping_rounds = 12,
+                   print_every_n = 100)
+cv_train$best_iteration
+```
+
+**iii.) Report the training RMSE (root mean squared error) and testing RMSE from\
+the best model. How does this compare to previous models that we've used\
+(remember that you should square this to get MSE)?**
+
+The best model has a train RMSE of 0.501 (MSE = 0.251) and a test RMSE 0.554 (MSE = 0.306).
+
+LASSO train: 0.522
+
+LASSO test: 0.537
+
+RF train: 0.256
+
+RF test: 0.335
+
+This means that the best iteration of the cross-validation has a train MSE of 0.251 and a test MSE of 0.306. This is very slightly better, but mostly similar to the random forest in terms of accuracy.
+
+**iv.) Use the xgboost function to train a model on the full training data using\
+our one cross-validated hyperparameter (the number of training iterations).\
+To do this, find the best iteration of the cross validated model and set that\
+as nrounds for the xgboost function.**
+
+```{r 2.c.iv}
+xgb_model <- xgboost(data=xgb_matrix_train, 
+                     nrounds=cv_train$best_iteration,
+                     print_every_n = 5) 
+```
+
+**v.) Use the predict command (the same way that we do in regression) and your\
+testing xgb.DMatrix to assess the fit of the model on the held out data.\
+How does the MSE compare to the MSE from cross-validation? How does it\
+compare to prior models?**
+
+```{r 2.c.v}
+xgb_pred_test <- predict(xgb_model, newdata=xgb_matrix_test)
+xgb_pred_test_mse <- mean((xgb_pred_test - getinfo(xgb_matrix_test, "label"))^2)
+```
+
+This XGBoost model has a test MSE of 0.302
+
+LASSO test: 0.537
+
+RF test: 0.335
+
+CV test: 0.306
+
+This is a tiny bit better than the cross-validation, but almost the same. It is notably more accurate previous random forest model and a large improvement compared to the LASSO model.
